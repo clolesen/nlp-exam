@@ -1,0 +1,22 @@
+---
+title: 'NLP Exam Project: Author collaborations in cognitive science'
+author: "Christoffer Lundbak Olesen"
+date: "11/22/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(reticulate)
+py_config()
+```
+
+```{python}
+import gensim
+from gensim import corpora, models, similarities
+```
+
