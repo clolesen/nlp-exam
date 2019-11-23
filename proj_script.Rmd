@@ -8,15 +8,111 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
+<h2>Libraries</h2>
 ```{r}
 library(tidyverse)
-library(reticulate)
-py_config()
 ```
 
-```{python}
-import gensim
-from gensim import corpora, models, similarities
+<h2>Prepare data</h2>
+```{r}
+
+#Load meta data
+metadata = read.csv("data/metadata.csv", stringsAsFactors = F)
+
+#Loop through docs and create a corpus in the desired format
+doc_list = list()
+i = 1
+for (id in metadata$ID){
+  doc = read.csv(paste0("clean_data/Processed_1gram/",id,".csv"), stringsAsFactors = F)
+  wVec = c()
+  for (r in 1:length(doc$word)){
+    wVec = c(wVec, rep(doc[r,1],doc[r,2]))
+  }
+  wStr = paste(wVec,collapse = " ")
+  row = data.frame(ID = id, string = wStr)
+  doc_list[[i]] = row
+  i = i + 1
+}
+corpus = do.call(rbind, doc_list)
+
+# make a list of authors containing the ID's of articles they wrote/co-wrote
+author_list = list()
+for(r in 1:length(metadata[,1])){
+  
+  id = metadata[r,"ID"]
+  names_str = metadata[r,"names"]
+  names = str_split(names_str, ",", simplify = T)
+  
+  for (name in names){
+    if (name %in% names(author_list)){
+      author_list[[name]] = c(author_list[[name]], id)
+    } else {
+      author_list[length(author_list)+1] = id
+      names(author_list) = c(names(author_list[1:length(author_list)-1]),name)
+    }
+  }
+}
+
+sum(lengths(author_list) > 3)
 ```
+
+```{r}
+
+```
+
+
+```{r}
+#topic model
+
+# create a document term matrix 
+dtm = CreateDtm(doc_vec = corpus$string, # character vector of documents
+                 doc_names = corpus$ID, # document names
+                 stopword_vec = c(),
+                 lower = F, # lowercase
+                 remove_punctuation = F,
+                 remove_numbers = T, 
+                 verbose = F) # Turn off status bar
+
+#Remove words that only accur one or twice in each doc
+dtm = dtm[,colSums(dtm) > 2]
+
+LDAmodel = FitLdaModel(dtm = dtm, 
+                     k = 100,
+                     iterations = 500,
+                     burnin = 180,
+                     alpha = 0.1,
+                     beta = 0.05,
+                     optimize_alpha = TRUE,
+                     calc_likelihood = TRUE,
+                     calc_coherence = TRUE,
+                     calc_r2 = TRUE,
+                     cpus = 2) 
+
+
+for (A in author_list){
+  docs = data.frame(ID = A)
+  docs = merge(docs,
+    subset(metadata, ID %in% A)[,"ID","time"]
+  )
+  docs = docs[order(docs$time),]
+  
+  ATM_list = list()
+  PubNum = 1
+  for (D in docs){
+    #topics = topics of D
+    if (PubNum == 1) row = topics else {
+      lastRow = ATM_list[[PubNum-1]]
+      lastATM = as.matrix(lastRow[,TOPICS])
+    }
+    ATM_list[[PubNum]] = row
+    PubNum = PubNum + 1
+  }
+}
+
+```
+
+
+
+
+
 
