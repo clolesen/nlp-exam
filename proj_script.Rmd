@@ -11,108 +11,335 @@ knitr::opts_chunk$set(echo = TRUE)
 <h2>Libraries</h2>
 ```{r}
 library(tidyverse)
+library(textmineR)
+library(LaplacesDemon)
+library(data.table)
+library(tictoc)
 ```
 
 <h2>Prepare data</h2>
 ```{r}
 
 #Load meta data
-metadata = read.csv("data/metadata.csv", stringsAsFactors = F)
+metadata = fread("data/metadata.csv")
 
-#Loop through docs and create a corpus in the desired format
-doc_list = list()
-i = 1
-for (id in metadata$ID){
-  doc = read.csv(paste0("clean_data/Processed_1gram/",id,".csv"), stringsAsFactors = F)
-  wVec = c()
-  for (r in 1:length(doc$word)){
-    wVec = c(wVec, rep(doc[r,1],doc[r,2]))
+prepareData = function(metadata){
+  #Loop through docs and create a corpus in the desired format
+  doc_list = list()
+  i = 1
+  for (id in metadata$ID){ # ---------------------------------------- CHANGE when running full
+    doc = read.csv(paste0("data/Processed_1gram/",id,".csv"), stringsAsFactors = F)
+    wVec = c()
+    for (r in 1:length(doc$word)){
+      wVec = c(wVec, rep(doc[r,1],doc[r,2]))
+    }
+    wStr = paste(wVec,collapse = " ")
+    row = data.frame(docID = i, string = wStr)
+    doc_list[[i]] = row
+    i = i + 1
   }
-  wStr = paste(wVec,collapse = " ")
-  row = data.frame(ID = id, string = wStr)
-  doc_list[[i]] = row
-  i = i + 1
-}
-corpus = do.call(rbind, doc_list)
-
-# make a list of authors containing the ID's of articles they wrote/co-wrote
-author_list = list()
-for(r in 1:length(metadata[,1])){
+  corpus = do.call(rbind, doc_list)
+  save(corpus, file = "R_objects/corpus.Rdata")
   
-  id = metadata[r,"ID"]
-  names_str = metadata[r,"names"]
-  names = str_split(names_str, ",", simplify = T)
-  
-  for (name in names){
-    if (name %in% names(author_list)){
-      author_list[[name]] = c(author_list[[name]], id)
-    } else {
-      author_list[length(author_list)+1] = id
-      names(author_list) = c(names(author_list[1:length(author_list)-1]),name)
+  # make a list of authors containing the ID's of articles they wrote/co-wrote
+  author_list = list()
+  for(r in 1:length(metadata[,1][[1]])){ # ---------------------------------------- CHANGE when running full
+    
+    docID = r
+    names_str = metadata[r,"names"]
+    names = str_split(names_str, ",", simplify = T)
+    names = names[names!=""]
+    
+    for (name in names){
+      if (name %in% names(author_list)){
+        author_list[[name]] = c(author_list[[name]], docID)
+      } else {
+        author_list[length(author_list)+1] = docID
+        names(author_list) = c(names(author_list[1:length(author_list)-1]),name)
+      }
     }
   }
-}
-
-sum(lengths(author_list) > 3)
-```
-
-```{r}
-
-```
-
-
-```{r}
-#topic model
-
-# create a document term matrix 
-dtm = CreateDtm(doc_vec = corpus$string, # character vector of documents
-                 doc_names = corpus$ID, # document names
-                 stopword_vec = c(),
-                 lower = F, # lowercase
-                 remove_punctuation = F,
-                 remove_numbers = T, 
-                 verbose = F) # Turn off status bar
-
-#Remove words that only accur one or twice in each doc
-dtm = dtm[,colSums(dtm) > 2]
-
-LDAmodel = FitLdaModel(dtm = dtm, 
-                     k = 100,
-                     iterations = 500,
-                     burnin = 180,
-                     alpha = 0.1,
-                     beta = 0.05,
-                     optimize_alpha = TRUE,
-                     calc_likelihood = TRUE,
-                     calc_coherence = TRUE,
-                     calc_r2 = TRUE,
-                     cpus = 2) 
-
-
-for (A in author_list){
-  docs = data.frame(ID = A)
-  docs = merge(docs,
-    subset(metadata, ID %in% A)[,"ID","time"]
-  )
-  docs = docs[order(docs$time),]
+  save(author_list, file = "R_objects/author_list.Rdata")
   
+  data_list = list(corpus,author_list)
+  return(data_list)
+}
+```
+
+
+```{r}
+test = TopicModels(k,corpus,metadata, author_list)# ------------------------------------------------ REMOVE
+TopicModels = function(k,corpus,metadata, author_list){
+
+  # create a document term matrix 
+  dtm = CreateDtm(doc_vec = corpus$string, # character vector of documents
+                  doc_names = corpus$docID, # document names
+                  stopword_vec = c(),
+                  lower = F, # lowercase
+                  remove_punctuation = F,
+                  remove_numbers = T, 
+                  verbose = F) # Turn off status bar
+  
+  #Remove words that only accur once or twice in each doc
+  dtm = dtm[,colSums(dtm) > 2]
+  
+  # Make topics
+  LDAmodel = FitLdaModel(dtm = dtm, 
+                         k = k,
+                         iterations = 2,# ---------------------------------------- CHANGE when running full
+                         burnin = 0,# ---------------------------------------- CHANGE when running full
+                         alpha = 0.1,
+                         beta = 0.05,
+                         optimize_alpha = TRUE,
+                         calc_likelihood = TRUE,
+                         calc_coherence = TRUE,
+                         calc_r2 = TRUE,
+                         cpus = 2) 
+  
+  save(LDAmodel, file = "R_objects/LDAmodel.Rdata")
+  print("LDA done")
+  
+  # Make author topic models
   ATM_list = list()
-  PubNum = 1
-  for (D in docs){
-    #topics = topics of D
-    if (PubNum == 1) row = topics else {
-      lastRow = ATM_list[[PubNum-1]]
-      lastATM = as.matrix(lastRow[,TOPICS])
+  i = 1
+  for (A in author_list){
+    docs = matrix(c(A,metadata[A,"time"][[1]]),ncol = 2) # make a matrix that contains docs and times
+    if (length(docs[,1])!=1) docs = docs[order(docs[,2]),] # Order the docs in time
+    
+    ATM = matrix(nrow = length(A), ncol = k+2) # create matrix for putting in data
+    PubNum = 1 # Publication number (start with the first)
+    for (doc in docs[,1]){ #loop through docs
+      topics = LDAmodel$theta[doc,] #Topic destribution of the doc 
+      if (PubNum == 1) row = topics else { # if its the first doc, then the ATM row is the same as the docs topic distribution. Else:
+        lastRow = ATM[PubNum-1,1:k] # Take the mean of all previous ATM rows
+        sum = lastRow*(PubNum-1)+topics # (here we reverse engineer the mean calculation)
+        row = sum/PubNum
+      }
+      row = c(row, doc, docs[PubNum,2]) # Add the doc id and the time point to the row
+      ATM[PubNum,] = row # put the row in the ATM
+      PubNum = PubNum + 1 # next publication
     }
-    ATM_list[[PubNum]] = row
-    PubNum = PubNum + 1
+    ATM_list[[i]] = ATM # put the ATM in the ATM_list
+    names(ATM_list)[i] = names(author_list[i]) # give the entry the author name
+    i = i + 1
   }
+  save(ATM_list, file = "R_objects/ATM_list.Rdata")
+  print("ATM done")
+  
+  results = list(LDAmodel,ATM_list)
+  return(results)
 }
 
 ```
 
 
+```{r}
+LDAmodel = test[[1]]# ------------------------------------------------ REMOVE
+ATM_list = test[[2]]# ------------------------------------------------ REMOVE
+k=2# ------------------------------------------------ REMOVE
+test_results = getSurDiv(ATM_list, LDAmodel,metadata,k)# ------------------------------------------------ REMOVE
+getSurDiv = function(ATM_list, LDAmodel, metadata, k){
+  
+  idCol = k + 1
+  timeCol = k + 2
+  
+  mainResults_list = list()
+  authorHistory_list = list()
+  i = 1
+  for (name in names(ATM_list)){
+    ATM = ATM_list[[name]]
+    
+    SurToPrev_list = c()
+    SurFromPrev_list = c()
+    SurToFirst_list = c()
+    SurFromFirst_list = c()
+    SurToLast_list = c()
+    SurFromLast_list = c()
+    SurToNext_list = c()
+    SurFromNext_list = c()
+    
+    for (PubNum in 1:length(ATM[,1])){
+      if (PubNum == 1){
+        SurToPrev = 0
+        SurFromPrev = 0
+        SurToFirst = 0
+        SurFromFirst = 0
+      } else {
+        KLprev = KLD(ATM[PubNum-1,1:k],ATM[PubNum,1:k])
+        KLfirst = KLD(ATM[1,1:k],ATM[PubNum,1:k])
+        
+        SurFromPrev = KLprev$sum.KLD.px.py
+        SurToPrev = KLprev$sum.KLD.py.px
+        
+        SurFromFirst = KLfirst$sum.KLD.px.py
+        SurToFirst = KLfirst$sum.KLD.py.px
+      }
+      if (PubNum == length(ATM[,1])){
+        SurToLast = 0
+        SurFromLast = 0
+        SurToNext = 0
+        SurFromNext = 0
+      } else {
+        KLlast = KLD(ATM[length(ATM[,1]),1:k],ATM[PubNum,1:k])
+        KLnext = KLD(ATM[PubNum+1,1:k],ATM[PubNum,1:k])
+        
+        SurFromNext = KLnext$sum.KLD.px.py
+        SurToNext = KLnext$sum.KLD.py.px
+        
+        SurFromLast = KLlast$sum.KLD.px.py
+        SurToLast = KLlast$sum.KLD.py.px
+      }
+      
+      SurToPrev_list = c(SurToPrev_list,SurToPrev)
+      SurFromPrev_list = c(SurFromPrev_list,SurFromPrev)
+      SurToFirst_list = c(SurToFirst_list,SurToFirst)
+      SurFromFirst_list = c(SurFromFirst_list,SurFromFirst)
+      SurToLast_list = c(SurToLast_list,SurToLast)
+      SurFromLast_list = c(SurFromLast_list,SurFromLast)
+      SurToNext_list = c(SurToNext_list,SurToNext)
+      SurFromNext_list = c(SurFromNext_list,SurFromNext)
+    }
+    
+    authorHistory_list[[i]] = data.table(
+      Author = name,
+      DocID = ATM[,idCol],
+      nColllab = metadata$ncon[ATM[,idCol]],
+      PubNum = 1:length(ATM[,1]),
+      MaxPubNum = length(ATM[,1]),
+      time = ATM[,timeCol],
+      SurToPrev= SurToPrev_list,
+      SurFromPrev = SurFromPrev_list,
+      SurToFirst = SurToFirst_list,
+      SurFromFirst = SurFromFirst_list,
+      SurToLast = SurToLast_list,
+      SurFromLast = SurFromLast_list,
+      SurToNext = SurToNext_list,
+      SurFromNext = SurFromNext_list
+    )
+    
+    i = i + 1
+  }
+  save(authorHistory_list, file = "R_objects/authorHistory_list.Rdata")
+  authorHistory = do.call(rbind, authorHistory_list)
+  print("Author history - done")
+  load(file = "R_objects/authorHistory_list.Rdata")
+  
+  
+  collabs = 1:length(metadata[,1][[1]])
+  collabs = collabs[metadata$ncon > 1] 
+  
+  theta = LDAmodel$theta
+  ii = 1
+  for (doc in collabs){
+    docTopics = theta[doc,]
+    
+    names = str_split(metadata[doc,"names"], ",", simplify = T)
+    names = names[names!=""]
+    KLs = c()
+    i = 1
+    subATM_list = list()
+    nPub = c()
+    time_list = c()
+    timeDifSur_list = c()
+    for (name in names){
+      ATM = ATM_list[[name]]
+      PubNum = match(doc,ATM[,idCol])
+      if (PubNum > 1){
+        subATM = ATM[PubNum-1,1:k]
+        KLdiv = KLD(subATM,docTopics)$sum.KLD.px.py
+        time_list = c(time_list, ATM[PubNum-1,timeCol])
+        subATM_list[[i]] = subATM
+        
+        timeSur = c(metadata[[doc,"time"]],ATM[PubNum-1,timeCol])
+        timeDifSur = max(timeSur)-min(timeSur)
+        timeDifSur_list = c(timeDifSur_list, timeDifSur)
+      } else {
+        KLdiv = 0
+        time_list = c(time_list, 0)
+        subATM_list[[i]] = rep(0,k)
+        timeDifSur_list = c(timeDifSur_list, 0)
+      }
+      KLs = c(KLs,KLdiv)
+      nPub = c(nPub, PubNum-1)
+      i = i + 1
+    }
+    surprise = min(KLs)
+    
+    div_list = c()
+    timeDif_list = c()
+    i = 1
+    for (n1 in 1:length(names)){
+      if (i == length(names)) break
+      i = i + 1
+      for (n2 in i:length(names)){
+        div = KLD(subATM_list[[n1]],subATM_list[[n2]])$intrinsic.discrepancy
+        div_list = c(div_list, div)
+        
+        times = c(time_list[n1], time_list[n2])
+        timeDif = max(times)-min(times)
+        timeDif_list = c(timeDif_list,timeDif)
+      }
+      
+    }
+    diversity = max(div_list)
+    
+    
+    mainResults_list[[ii]] = data.table(
+      docID = doc,
+      nCollab = metadata$ncon[doc],
+      Diversity = diversity,
+      Surprise = surprise,
+      docTime = metadata[[doc,"time"]],
+      maxTimePrev = max(time_list),
+      minTimePrev = min(time_list),
+      meanTimeDifDiveristy = mean(timeDif_list),
+      meanTimeDifSurprise = mean(timeDifSur_list),
+      minPrevPub = min(nPub),
+      maxPrevPub = max(nPub)
+    )
+    ii = ii + 1  
+  } # END loop through collabs
+  
+  mainResults = do.call(rbind, mainResults_list)
+  save(mainResults, file = "R_objects/mainResults.Rdata")
+  print("Main results - done")
+  
+  
+  results = list(mainResults,authorHistory)
+  return(results)
+}
+```
 
-
-
+```{r}
+RunItAll = function(k,metadata){
+  tic("total run time")
+  
+  tic("prepare data")
+  data = prepareData(metadata)
+  toc()
+  
+  corpus = data[[1]]
+  author_list = data[[2]]
+  
+  
+  tic("Topic modeling")
+  TM = TopicModels(k, corpus, metadata, author_list)
+  toc()
+  
+  LDAmodel = TM[[1]]
+  ATM_list = TM[[2]]
+  
+  tic("Caluculate Diversity and Surprise")
+  surDiv = getSurDiv(ATM_list, LDAmodel, metadata, k)
+  toc()
+  
+  mainResults = surDiv[[1]]
+  authorHistory = surDiv[[2]]
+  
+  results = list(mainResults, authorHistory, LDAmodel, ATM_list)
+  return(results)
+  
+  toc()
+}
+```
 
