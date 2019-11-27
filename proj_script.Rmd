@@ -8,7 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-<h2>Libraries</h2>
+Libraries
 ```{r}
 library(tidyverse)
 library(textmineR)
@@ -17,18 +17,25 @@ library(data.table)
 library(tictoc)
 ```
 
-<h2>Prepare data</h2>
+Analysis
 ```{r}
-
 #Load meta data
 metadata = fread("data/metadata.csv")
 
+#Run the analysis with k = 150
+#RUN THE FUNCTION BLOC BELOW FIRST
+Results = RunItAll(150, metadata)
+```
+
+FUNCTIONS
+```{r}
+# Function that prepares data for analysis
 prepareData = function(metadata){
   #Loop through docs and create a corpus in the desired format
   doc_list = list()
   i = 1
-  for (id in metadata$ID){ # ---------------------------------------- CHANGE when running full
-    doc = read.csv(paste0("data/Processed_1gram/",id,".csv"), stringsAsFactors = F)
+  for (id in metadata$ID){
+    doc = fread(paste0("data/Processed_1gram/",id,".csv"))
     wVec = c()
     for (r in 1:length(doc$word)){
       wVec = c(wVec, rep(doc[r,1],doc[r,2]))
@@ -43,7 +50,7 @@ prepareData = function(metadata){
   
   # make a list of authors containing the ID's of articles they wrote/co-wrote
   author_list = list()
-  for(r in 1:length(metadata[,1][[1]])){ # ---------------------------------------- CHANGE when running full
+  for(r in 1:length(metadata[,1][[1]])){ 
     
     docID = r
     names_str = metadata[r,"names"]
@@ -64,11 +71,8 @@ prepareData = function(metadata){
   data_list = list(corpus,author_list)
   return(data_list)
 }
-```
 
-
-```{r}
-test = TopicModels(k,corpus,metadata, author_list)# ------------------------------------------------ REMOVE
+# Function that runs an LDA model on the corpus and makes ATMs for each athour (ATM over time)
 TopicModels = function(k,corpus,metadata, author_list){
 
   # create a document term matrix 
@@ -86,8 +90,8 @@ TopicModels = function(k,corpus,metadata, author_list){
   # Make topics
   LDAmodel = FitLdaModel(dtm = dtm, 
                          k = k,
-                         iterations = 2,# ---------------------------------------- CHANGE when running full
-                         burnin = 0,# ---------------------------------------- CHANGE when running full
+                         iterations = 350,
+                         burnin = 200,
                          alpha = 0.1,
                          beta = 0.05,
                          optimize_alpha = TRUE,
@@ -130,14 +134,7 @@ TopicModels = function(k,corpus,metadata, author_list){
   return(results)
 }
 
-```
-
-
-```{r}
-LDAmodel = test[[1]]# ------------------------------------------------ REMOVE
-ATM_list = test[[2]]# ------------------------------------------------ REMOVE
-k=2# ------------------------------------------------ REMOVE
-test_results = getSurDiv(ATM_list, LDAmodel,metadata,k)# ------------------------------------------------ REMOVE
+# Function that calculates suprise and diversity measure and returns the main results and the author history 
 getSurDiv = function(ATM_list, LDAmodel, metadata, k){
   
   idCol = k + 1
@@ -308,9 +305,8 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k){
   results = list(mainResults,authorHistory)
   return(results)
 }
-```
 
-```{r}
+# Function that runs all above function in correct order and measures how long it takes in time
 RunItAll = function(k,metadata){
   tic("total run time")
   
@@ -337,9 +333,10 @@ RunItAll = function(k,metadata){
   authorHistory = surDiv[[2]]
   
   results = list(mainResults, authorHistory, LDAmodel, ATM_list)
-  return(results)
   
   toc()
+  
+  return(results)
 }
 ```
 
