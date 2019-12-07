@@ -8,7 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-Libraries
+LIBRARIES
 ```{r}
 library(tidyverse)
 library(textmineR)
@@ -17,7 +17,7 @@ library(data.table)
 library(tictoc)
 ```
 
-Analysis
+GET RESULTS
 ```{r}
 #Load meta data
 metadata = fread("data/metadata.csv")
@@ -135,12 +135,16 @@ TopicModels = function(k,corpus,metadata, author_list){
 }
 
 # Function that calculates suprise and diversity measure and returns the main results and the author history 
-getSurDiv = function(ATM_list, LDAmodel, metadata, k){
+getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
+  
   
   idCol = k + 1
   timeCol = k + 2
   
   mainResults_list = list()
+  
+  if (skipHist == F){
+  
   authorHistory_list = list()
   i = 1
   for (name in names(ATM_list)){
@@ -219,8 +223,8 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k){
   save(authorHistory_list, file = "R_objects/authorHistory_list.Rdata")
   authorHistory = do.call(rbind, authorHistory_list)
   print("Author history - done")
-  load(file = "R_objects/authorHistory_list.Rdata")
-  
+
+  } else {authorHistory = "NO AUTHOR HISTORY HERE"}
   
   collabs = 1:length(metadata[,1][[1]])
   collabs = collabs[metadata$ncon > 1] 
@@ -298,7 +302,7 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k){
   } # END loop through collabs
   
   mainResults = do.call(rbind, mainResults_list)
-  save(mainResults, file = "R_objects/mainResults.Rdata")
+  if (skipHist == F) save(mainResults, file = "R_objects/mainResults.Rdata")
   print("Main results - done")
   
   
@@ -340,3 +344,179 @@ RunItAll = function(k,metadata){
 }
 ```
 
+GENERATE NEW DOCS
+```{r}
+topic_list = names(Results[[3]]$theta[1,])
+word_list = names(Results[[3]]$phi[1,])
+t_list = c()  
+newDocs_list = list()
+i = 1
+n = 1
+for (id in subset(Results[[1]], minPrevPub > 1 & nCollab %in% 2:4)$docID){
+  tic()
+  names_str = metadata[id,"names"]
+  names = str_split(names_str, ",", simplify = T)
+  names = names[names!=""]
+  
+  nCollab = metadata[id,"ncon"][[1]]
+  len = length(str_split(corpus$string[id], " ", simplify = T)) 
+  nWords = round(len/nCollab)
+  ii = 1
+  for (x in 1:1){
+    newDoc = c()
+    for (name in names){
+      ATM = Results[[4]][[name]]
+      prev = which(ATM[,151] == id) - 1
+      prevTopics = ATM[prev,1:150]
+      
+      for (wNum in 1:nWords){
+        topic = sample(topic_list, size = 1, prob = prevTopics)
+        word = sample(word_list, size = 1, prob = Results[[3]]$phi[topic,])
+        
+        newDoc = c(newDoc, word)
+      }
+    }
+    newDocID = id + (ii * 10^-3)
+      row = data.table(docID = newDocID, string = paste(newDoc, collapse = " "))
+      newDocs_list[[i]] = row
+      i = i + 1
+      ii = ii + 1
+  }
+  print(paste(n,"out of 346 -",346-n,"left", sep = " "))
+  n = n + 1
+  t = toc()
+  t = t$toc[[1]] - t$tic[[1]]
+  t_list = c(t_list,t)
+}
+newDocs = do.call(rbind, newDocs_list)
+
+
+# create a document term matrix 
+newDtm = CreateDtm(doc_vec = newDocs$string, # character vector of documents
+                doc_names = newDocs$docID, # document names
+                stopword_vec = c(),
+                lower = F, # lowercase
+                remove_punctuation = F,
+                remove_numbers = F, 
+                verbose = T) # Turn on status bar
+
+# Predict LDA topics on new documents
+newTheta = predict(Results[[3]], newDtm, iterations = 350, burnin = 200)
+
+# Suprise ~ Diversity analysis on new documents
+k = 150
+idCol = k + 1
+timeCol = k + 2
+newResults_list = list()
+ii = 1
+for (doc in newDocs$docID){
+  docTopics = newTheta[ii,]
+  
+  oDoc = as.integer(doc)
+  
+  names = str_split(metadata[oDoc,"names"], ",", simplify = T)
+  names = names[names!=""]
+  KLs = c()
+  i = 1
+  subATM_list = list()
+  nPub = c()
+  time_list = c()
+  timeDifSur_list = c()
+  for (name in names){
+    ATM = Results[[4]][[name]]
+    PubNum = match(oDoc,ATM[,idCol])
+    if (PubNum > 1){
+      subATM = ATM[PubNum-1,1:k] 
+      KLdiv = KLD(subATM,docTopics)$sum.KLD.px.py
+      subATM_list[[i]] = subATM
+    } else {
+      KLdiv = 0
+      subATM_list[[i]] = rep(0,k)
+    }
+    KLs = c(KLs,KLdiv)
+    nPub = c(nPub, PubNum-1)
+    i = i + 1
+  }
+  surprise = min(KLs)
+  
+  div_list = c()
+  i = 1
+  for (n1 in 1:length(names)){
+    if (i == length(names)) break
+    i = i + 1
+    for (n2 in i:length(names)){
+      div = KLD(subATM_list[[n1]],subATM_list[[n2]])$intrinsic.discrepancy
+      div_list = c(div_list, div)
+    }
+    
+  }
+  diversity = max(div_list)
+  
+  
+  newResults_list[[ii]] = data.table(
+    docID = doc,
+    nCollab = metadata$ncon[doc],
+    Diversity = diversity,
+    Surprise = surprise,
+    docTime = metadata[[doc,"time"]],
+    minPrevPub = min(nPub),
+    maxPrevPub = max(nPub)
+  )
+  ii = ii + 1  
+} # END loop through collabs
+newResults = do.call(rbind, newResults_list)
+
+```
+
+OTHER STUFF
+```{r}
+withinSupriseData_list = list()
+i = 1
+for (author in unique(Results[[2]]$Author)){
+  data = Results[[2]][Results[[2]]$Author == author,]
+  data = data[data$nColllab < 5,]
+  try(if (data[1,"MaxPubNum"] > 2){
+    withinSur = mean(data$SurToPrev)
+    meanCol = mean(data$nColllab)
+    row = data.table(
+      Author = author,
+      meanCollab = meanCol,
+      withinSurprise = withinSur
+    )
+    withinSupriseData_list[[i]] = row
+    i = i + 1
+  }, silent = T)
+}
+withinSupriseData = do.call(rbind, withinSupriseData_list)
+
+ggplot(withinSupriseData, aes(y = meanCollab, x = withinSurprise)) +
+  geom_point(size=0.1) +
+  geom_smooth()
+
+withinSupriseData[withinSupriseData$meanCollab>15]
+
+Results[[2]][Results[[2]]$Author=="minawestman"]
+
+subset(Results[[1]], Surprise > 3 & nCollab == 3)
+
+metadata[12091,]
+
+
+
+ggplot(as.data.frame(Results[[3]]$theta[2,]), aes(y = `Results[[3]]$theta[2, ]`, x = 1:150)) +
+  geom_point()
+
+GetTopTerms(Results[[3]]$phi, 10)
+
+
+
+
+# Find lenght of documents
+len_list = c()
+for (i in 1:17947){
+  len = length(str_split(corpus$string[i], " ", simplify = T))
+  len_list = c(len_list, len)
+}
+mean(len_list)
+sd(len_list)
+```
