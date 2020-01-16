@@ -1,7 +1,7 @@
 ---
 title: 'NLP Exam Project: Author collaborations in cognitive science'
 author: "Christoffer Lundbak Olesen"
-date: "11/22/2019"
+date: "01/16/2020"
 output: html_document
 ---
 
@@ -20,11 +20,13 @@ library(tictoc)
 GET RESULTS
 ```{r}
 #Load meta data
-metadata = fread("data/metadata.csv")
+path = "data/processed/cognition"
+obj_path = "data/R_objects/cognition"
+metadata = fread(paste0(path,"/metadata.csv"))
 
-#Run the analysis with k = 150
+#Run the analysis with k = 200
 #RUN THE FUNCTION BLOC BELOW FIRST
-Results = RunItAll(150, metadata)
+Results = RunItAll(200, metadata)
 ```
 
 FUNCTIONS
@@ -35,10 +37,10 @@ prepareData = function(metadata){
   doc_list = list()
   i = 1
   for (id in metadata$ID){
-    doc = fread(paste0("data/Processed_1gram/",id,".csv"))
+    doc = read.csv(paste0(path,"/1gram/",id,".csv"), stringsAsFactors = F)
     wVec = c()
     for (r in 1:length(doc$word)){
-      wVec = c(wVec, rep(doc[r,1],doc[r,2]))
+      wVec = c(wVec, rep(doc[r,2],doc[r,3]))
     }
     wStr = paste(wVec,collapse = " ")
     row = data.frame(docID = i, string = wStr)
@@ -46,7 +48,7 @@ prepareData = function(metadata){
     i = i + 1
   }
   corpus = do.call(rbind, doc_list)
-  save(corpus, file = "R_objects/corpus.Rdata")
+  save(corpus, file = paste0(obj_path,"/corpus.Rdata"))
   
   # make a list of authors containing the ID's of articles they wrote/co-wrote
   author_list = list()
@@ -66,7 +68,7 @@ prepareData = function(metadata){
       }
     }
   }
-  save(author_list, file = "R_objects/author_list.Rdata")
+  save(author_list, file = paste0(obj_path,"/author_list.Rdata"))
   
   data_list = list(corpus,author_list)
   return(data_list)
@@ -100,7 +102,7 @@ TopicModels = function(k,corpus,metadata, author_list){
                          calc_r2 = TRUE,
                          cpus = 2) 
   
-  save(LDAmodel, file = "R_objects/LDAmodel.Rdata")
+  save(LDAmodel, file = paste0(obj_path,"/LDAmodel.Rdata"))
   print("LDA done")
   
   # Make author topic models
@@ -127,7 +129,7 @@ TopicModels = function(k,corpus,metadata, author_list){
     names(ATM_list)[i] = names(author_list[i]) # give the entry the author name
     i = i + 1
   }
-  save(ATM_list, file = "R_objects/ATM_list.Rdata")
+  save(ATM_list, file = paste0(obj_path,"/ATM_list.Rdata"))
   print("ATM done")
   
   results = list(LDAmodel,ATM_list)
@@ -138,19 +140,21 @@ TopicModels = function(k,corpus,metadata, author_list){
 getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
   
   
-  idCol = k + 1
-  timeCol = k + 2
+  idCol = k + 1 # column index of the doc ids in the ATMs
+  timeCol = k + 2  # column index of the time variable in the ATMs
   
   mainResults_list = list()
   
   if (skipHist == F){
   
+    # MAKE AUTHOR HISTORY
   authorHistory_list = list()
   i = 1
-  for (name in names(ATM_list)){
-    ATM = ATM_list[[name]]
+  for (name in names(ATM_list)){ # Loop through names of authors
+    ATM = ATM_list[[name]] # the ATM of the given author
     
-    SurToPrev_list = c()
+    # Prepare lists for surprise measures
+    SurToPrev_list = c() 
     SurFromPrev_list = c()
     SurToFirst_list = c()
     SurFromFirst_list = c()
@@ -159,13 +163,14 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
     SurToNext_list = c()
     SurFromNext_list = c()
     
+    # loop through the authors publications
     for (PubNum in 1:length(ATM[,1])){
-      if (PubNum == 1){
+      if (PubNum == 1){ #the first publication does not have surprise in relation to the first or the previous publication, so it is set to 0
         SurToPrev = 0
         SurFromPrev = 0
         SurToFirst = 0
         SurFromFirst = 0
-      } else {
+      } else { # ELSE calculate these surprise values
         KLprev = KLD(ATM[PubNum-1,1:k],ATM[PubNum,1:k])
         KLfirst = KLD(ATM[1,1:k],ATM[PubNum,1:k])
         
@@ -175,12 +180,12 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
         SurFromFirst = KLfirst$sum.KLD.px.py
         SurToFirst = KLfirst$sum.KLD.py.px
       }
-      if (PubNum == length(ATM[,1])){
+      if (PubNum == length(ATM[,1])){ # The last publication 
         SurToLast = 0
         SurFromLast = 0
         SurToNext = 0
         SurFromNext = 0
-      } else {
+      } else { # Calculate suprise values
         KLlast = KLD(ATM[length(ATM[,1]),1:k],ATM[PubNum,1:k])
         KLnext = KLD(ATM[PubNum+1,1:k],ATM[PubNum,1:k])
         
@@ -191,6 +196,7 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
         SurToLast = KLlast$sum.KLD.py.px
       }
       
+      # Store surprise values
       SurToPrev_list = c(SurToPrev_list,SurToPrev)
       SurFromPrev_list = c(SurFromPrev_list,SurFromPrev)
       SurToFirst_list = c(SurToFirst_list,SurToFirst)
@@ -201,6 +207,7 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
       SurFromNext_list = c(SurFromNext_list,SurFromNext)
     }
     
+    #put the author history in the list
     authorHistory_list[[i]] = data.table(
       Author = name,
       DocID = ATM[,idCol],
@@ -220,71 +227,88 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
     
     i = i + 1
   }
-  save(authorHistory_list, file = "R_objects/authorHistory_list.Rdata")
+  save(authorHistory_list, file = paste0(obj_path,"/authorHistory_list.Rdata"))
   authorHistory = do.call(rbind, authorHistory_list)
   print("Author history - done")
 
   } else {authorHistory = "NO AUTHOR HISTORY HERE"}
   
+  #Identify all collaborations
   collabs = 1:length(metadata[,1][[1]])
   collabs = collabs[metadata$ncon > 1] 
   
-  theta = LDAmodel$theta
+  # CALCULATE MAIN RESULTS
+  theta = LDAmodel$theta # Extract theta from the LDA model
   ii = 1
-  for (doc in collabs){
-    docTopics = theta[doc,]
+  for (doc in collabs){ # loop through collaborations
     
+    docTopics = theta[doc,] #identify the topics of the document
+    
+    # Get names of authors
     names = str_split(metadata[doc,"names"], ",", simplify = T)
     names = names[names!=""]
-    KLs = c()
+    
     i = 1
+    
+    # prepare lists
+    KLs = c()
     subATM_list = list()
     nPub = c()
     time_list = c()
     timeDifSur_list = c()
+    
+    # loop through authors of the doc
     for (name in names){
-      ATM = ATM_list[[name]]
-      PubNum = match(doc,ATM[,idCol])
-      if (PubNum > 1){
-        subATM = ATM[PubNum-1,1:k]
-        KLdiv = KLD(subATM,docTopics)$sum.KLD.px.py
-        time_list = c(time_list, ATM[PubNum-1,timeCol])
-        subATM_list[[i]] = subATM
+      ATM = ATM_list[[name]] # Get ATM
+      PubNum = match(doc,ATM[,idCol]) # Identify this docs number whithin the authors publications
+      if (PubNum > 1){ # If it is not the authors first publication
+        subATM = ATM[PubNum-1,1:k] # Get the ATM at the previous time point
+        KLdiv = KLD(subATM,docTopics)$sum.KLD.px.py # Calculate the KL divergence
+        time_list = c(time_list, ATM[PubNum-1,timeCol]) #store the previous time point (time vairable)
+        subATM_list[[i]] = subATM # store the ATM at the previous time point
         
-        timeSur = c(metadata[[doc,"time"]],ATM[PubNum-1,timeCol])
+        # get time difference for the docs used in the surprise meesure
+        timeSur = c(metadata[[doc,"time"]],ATM[PubNum-1,timeCol]) 
         timeDifSur = max(timeSur)-min(timeSur)
         timeDifSur_list = c(timeDifSur_list, timeDifSur)
-      } else {
+      } else { # If it IS the authors first publication
         KLdiv = 0
         time_list = c(time_list, 0)
         subATM_list[[i]] = rep(0,k)
         timeDifSur_list = c(timeDifSur_list, 0)
       }
+      # Store vairables
       KLs = c(KLs,KLdiv)
       nPub = c(nPub, PubNum-1)
       i = i + 1
     }
+    # Get Surprise (minimum KL-divergence)
     surprise = min(KLs)
     
+    # Prepare for diversity
     div_list = c()
     timeDif_list = c()
     i = 1
+    # loop through authors of the document
     for (n1 in 1:length(names)){
-      if (i == length(names)) break
+      if (i == length(names)) break #Break the loop when getting to the last author (in order not to calculate anything twice)
       i = i + 1
-      for (n2 in i:length(names)){
-        div = KLD(subATM_list[[n1]],subATM_list[[n2]])$intrinsic.discrepancy
-        div_list = c(div_list, div)
+      for (n2 in i:length(names)){ # Loop thorugh all subsequent authors
+        div = KLD(subATM_list[[n1]],subATM_list[[n2]])$intrinsic.discrepancy # calculate intrinsict descrpency of KL-divergence
         
+        div_list = c(div_list, div) # store values
+        
+        # get time differences for the authors in the diversity measure
         times = c(time_list[n1], time_list[n2])
         timeDif = max(times)-min(times)
         timeDif_list = c(timeDif_list,timeDif)
       }
       
     }
+    # Get diversity
     diversity = max(div_list)
     
-    
+    # Store the results in a list of rows
     mainResults_list[[ii]] = data.table(
       docID = doc,
       nCollab = metadata$ncon[doc],
@@ -302,7 +326,7 @@ getSurDiv = function(ATM_list, LDAmodel, metadata, k, skipHist = F){
   } # END loop through collabs
   
   mainResults = do.call(rbind, mainResults_list)
-  if (skipHist == F) save(mainResults, file = "R_objects/mainResults.Rdata")
+  if (skipHist == F) save(mainResults, file = paste0(obj_path,"/mainResults.Rdata"))
   print("Main results - done")
   
   
@@ -352,6 +376,7 @@ t_list = c()
 newDocs_list = list()
 i = 1
 n = 1
+k = 150
 for (id in subset(Results[[1]], minPrevPub > 1 & nCollab %in% 2:4)$docID){
   tic()
   names_str = metadata[id,"names"]
@@ -366,8 +391,8 @@ for (id in subset(Results[[1]], minPrevPub > 1 & nCollab %in% 2:4)$docID){
     newDoc = c()
     for (name in names){
       ATM = Results[[4]][[name]]
-      prev = which(ATM[,151] == id) - 1
-      prevTopics = ATM[prev,1:150]
+      prev = which(ATM[,k+1] == id) - 1
+      prevTopics = ATM[prev,1:k]
       
       for (wNum in 1:nWords){
         topic = sample(topic_list, size = 1, prob = prevTopics)
@@ -382,11 +407,13 @@ for (id in subset(Results[[1]], minPrevPub > 1 & nCollab %in% 2:4)$docID){
       i = i + 1
       ii = ii + 1
   }
-  print(paste(n,"out of 346 -",346-n,"left", sep = " "))
+  print(paste(n,"out of 1611 -",1611-n,"left", sep = " "))
   n = n + 1
   t = toc()
   t = t$toc[[1]] - t$tic[[1]]
   t_list = c(t_list,t)
+  est = (mean(t_list)*(1611-n))/60/60
+  print(paste("Estimated time left:",est,"hours", sep = " "))
 }
 newDocs = do.call(rbind, newDocs_list)
 
@@ -402,6 +429,7 @@ newDtm = CreateDtm(doc_vec = newDocs$string, # character vector of documents
 
 # Predict LDA topics on new documents
 newTheta = predict(Results[[3]], newDtm, iterations = 350, burnin = 200)
+save(newTheta, file = paste0(obj_path,"/newTheta.Rdata"))
 
 # Suprise ~ Diversity analysis on new documents
 k = 150
@@ -465,58 +493,6 @@ for (doc in newDocs$docID){
   ii = ii + 1  
 } # END loop through collabs
 newResults = do.call(rbind, newResults_list)
-
+save(newResults, file = paste0(obj_path,"/newReuslts.Rdata"))
 ```
 
-OTHER STUFF
-```{r}
-withinSupriseData_list = list()
-i = 1
-for (author in unique(Results[[2]]$Author)){
-  data = Results[[2]][Results[[2]]$Author == author,]
-  data = data[data$nColllab < 5,]
-  try(if (data[1,"MaxPubNum"] > 2){
-    withinSur = mean(data$SurToPrev)
-    meanCol = mean(data$nColllab)
-    row = data.table(
-      Author = author,
-      meanCollab = meanCol,
-      withinSurprise = withinSur
-    )
-    withinSupriseData_list[[i]] = row
-    i = i + 1
-  }, silent = T)
-}
-withinSupriseData = do.call(rbind, withinSupriseData_list)
-
-ggplot(withinSupriseData, aes(y = meanCollab, x = withinSurprise)) +
-  geom_point(size=0.1) +
-  geom_smooth()
-
-withinSupriseData[withinSupriseData$meanCollab>15]
-
-Results[[2]][Results[[2]]$Author=="minawestman"]
-
-subset(Results[[1]], Surprise > 3 & nCollab == 3)
-
-metadata[12091,]
-
-
-
-ggplot(as.data.frame(Results[[3]]$theta[2,]), aes(y = `Results[[3]]$theta[2, ]`, x = 1:150)) +
-  geom_point()
-
-GetTopTerms(Results[[3]]$phi, 10)
-
-
-
-
-# Find lenght of documents
-len_list = c()
-for (i in 1:17947){
-  len = length(str_split(corpus$string[i], " ", simplify = T))
-  len_list = c(len_list, len)
-}
-mean(len_list)
-sd(len_list)
-```
